@@ -20,32 +20,74 @@ The app selects due rows (`status = scheduled`, `platform = instagram`,
 | `Jenkinsfile` | Pipeline definition — schedule, concurrency guard, exit-code mapping |
 | `publish_due_instagram_posts.py` | Drains the route and reports. Stdlib only, no `pip install` |
 
-## Setup
+## Setup — the whole list
 
-1. **Put this folder in SCM.** The `Jenkinsfile` is consumed via *Pipeline
-   script from SCM*, which needs a git remote. A local folder on the agent
-   will not work.
-2. **Credential** — add a Jenkins *Secret text* credential holding the same
-   value as `CRON_SECRET` on the target deployment. Default ID
-   `arkgpt-cron-secret`. Use a distinct credential and job per environment.
-3. **Deployment env** — `CRON_SECRET` and `COMPOSIO_API_KEY` must be set on
-   the deployment. Missing secret → `401`, missing Composio key → `503`. The
-   job fails loudly in both cases rather than reporting a quiet success.
-4. **Job** — new Pipeline job → *Pipeline script from SCM* → Script Path
-   `Jenkinsfile`. The `triggers { cron(...) }` block supplies the schedule
-   after the first manual build.
-5. **Agent** — needs `python3`. Nothing else.
+### 1. One secret on Jenkins
 
-## Parameters
+*Manage Jenkins → Credentials → System → Global → Add Credentials*
+
+| Field | Value |
+|-------|-------|
+| Kind | **Secret text** |
+| ID | `arkgpt-cron-secret` |
+| Secret | the same string as `CRON_SECRET` in the app's environment |
+
+That is the **only** credential this job needs. The ID is hardcoded in the
+Jenkinsfile, so it must match exactly.
+
+### 2. Env vars on the app (not on Jenkins)
+
+`.env.local` for local dev, or the hosting provider's env for a deployment:
+
+| Variable | Required | Missing → |
+|----------|----------|-----------|
+| `CRON_SECRET` | yes | route returns `401` for everything (fail-closed) |
+| `COMPOSIO_API_KEY` | yes | route returns `503` |
+| `COMPOSIO_USER_ID` | no | falls back to a connected-account lookup |
+| `NEXT_PUBLIC_SUPABASE_URL` | yes | already needed to run the app |
+| `NEXT_PUBLIC_SUPABASE_PUBLIC_KEY` | yes | already needed to run the app |
+| `SUPABASE_SECRET_KEY` | yes | already needed to run the app |
+
+Env changes are not hot-reloaded — restart `next dev` after editing.
+
+### 3. One line in the Jenkinsfile
+
+`ARKGPT_BASE_URL` in the `environment {}` block:
+
+- local dev — `http://localhost:3000`
+- Jenkins in Docker — `http://host.docker.internal:3000`
+- production — `https://app.arkem.io`
+
+It is deliberately **not** a build parameter. The job sends `CRON_SECRET` to
+this origin in a header, so anyone able to override it at build time could
+point the job at a host they control and capture the secret.
+
+### 4. The job
+
+New Pipeline job → *Pipeline script from SCM* → Git:
+
+| Field | Value |
+|-------|-------|
+| Repository URL | `https://github.com/isaac-arkem/poster.git` |
+| Credentials | `- none -` (public repo) |
+| Branch Specifier | `*/main` — Jenkins defaults to `*/master`, which fails |
+| Script Path | `Jenkinsfile` |
+
+Then **Build Now** once. The `cron('H/15 * * * *')` trigger only registers
+after Jenkins has evaluated the Jenkinsfile, so the schedule does not start on
+its own until that first manual build.
+
+The agent needs `python3`. Nothing else — the script is stdlib-only.
+
+## Build parameter
 
 | Parameter | Default | Notes |
 |-----------|---------|-------|
-| `ARKGPT_BASE_URL` | `https://app.arkem.io` | Target origin, no trailing slash |
-| `CRON_SECRET_CREDENTIAL_ID` | `arkgpt-cron-secret` | Secret-text credential ID |
-| `PUBLISH_DRAIN_ROUNDS` | `10` | 5 posts/round, so 50 posts per build; the rest rolls over |
-| `PUBLISH_ROUND_PAUSE_SEC` | `5` | Pause between rounds |
-| `PUBLISH_TIMEOUT_SEC` | `330` | Must exceed the route's 300s `maxDuration` |
 | `FAIL_ON_PUBLISH_ERROR` | `false` | Off → per-post failures mark the build UNSTABLE. On → they fail it |
+
+Tuning knobs (`PUBLISH_DRAIN_ROUNDS`, `PUBLISH_ROUND_PAUSE_SEC`,
+`PUBLISH_TIMEOUT_SEC`) live in the `environment {}` block with working
+defaults; you should not need to touch them.
 
 ## Build outcomes
 
@@ -69,7 +111,8 @@ The app selects due rows (`status = scheduled`, `platform = instagram`,
   broken alias does not red every build on a 15-minute schedule.
 - **Secret hygiene.** `set +x`; the secret is read from the environment, never
   a command line; redirects are refused so it is not replayed on another host;
-  and a non-https base URL is rejected.
+  a non-https base URL is rejected (localhost excepted); and the target origin
+  is not overridable at build time.
 
 ## Known gap: time of day
 
