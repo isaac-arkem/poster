@@ -30,14 +30,16 @@
 // below is therefore what actually decides the time of day posts go out.
 
 pipeline {
-  // Runs on the Jenkins controller itself — no separate agent to install or
-  // keep online. The controller needs at least one executor for this to be
-  // schedulable: Manage Jenkins -> Nodes -> Built-In Node -> Configure ->
-  // "Number of executors" >= 1. Recent Jenkins ships that at 0, and a build
-  // then sits forever on "Still waiting to schedule task".
+  // Any executor. Do NOT pin this to `label 'built-in'` — a default Jenkins
+  // controller carries no labels at all, so that expression matches nothing
+  // and the build sits forever on "Still waiting to schedule task".
   //
-  // Swap for a label (e.g. label 'Dobby') to pin this to a dedicated agent.
-  agent { label 'built-in' }
+  // If a build does hang there, the reason is in Manage Jenkins -> Script
+  // Console: `Jenkins.instance.queue.items.each { println it.why }`.
+  // Usual causes: the built-in node has 0 executors (Manage Jenkins -> Nodes
+  // -> Built-In Node -> Configure), or an earlier build is wedged and
+  // disableConcurrentBuilds() below is holding this one behind it.
+  agent any
 
   environment {
     // ---- EDIT THIS ----------------------------------------------------
