@@ -26,9 +26,10 @@
 //
 // The agent needs python3. The script is stdlib-only, no pip install.
 //
-// What "due" means today: sse_content_posts.scheduled_date is a DATE column,
-// so a post becomes due at 00:00 UTC on its scheduled day. The cron expression
-// below is therefore what actually decides the time of day posts go out.
+// What "due" means: sse_content_posts.scheduled_at is a timestamp, so a post
+// carries its own time of day. The cron expression below no longer decides
+// WHEN a post goes out — it decides how LATE it can be. At */5 a post
+// scheduled for 10:00 publishes by 10:05 at the worst.
 
 pipeline {
   // Any executor. Do NOT pin this to `label 'built-in'` — a default Jenkins
@@ -54,9 +55,15 @@ pipeline {
     ARKGPT_BASE_URL = 'http://localhost:3000'
     // -------------------------------------------------------------------
 
-    // 5 posts per round, so 10 rounds clears 50 posts per build; any remainder
-    // rolls over to the next build.
-    PUBLISH_DRAIN_ROUNDS = '10'
+    // The route publishes across accounts concurrently, so a round clears
+    // roughly 24 posts rather than 5. Four rounds is ~96 per build, which is
+    // far more than a tick ever has waiting.
+    //
+    // The cap is bounded by the build timeout below, NOT by appetite: a round
+    // can use the route's full 280s, so rounds x (280 + pause) must stay under
+    // it. Being killed mid-round is the one genuinely dangerous outcome — the
+    // post can be live on Instagram with nothing recorded against it.
+    PUBLISH_DRAIN_ROUNDS = '4'
     // Pause between rounds so a backlog does not hammer the Graph API.
     PUBLISH_ROUND_PAUSE_SEC = '5'
     // Must exceed the route's 300s maxDuration, so a slow tick surfaces as a
@@ -73,15 +80,21 @@ pipeline {
     // stamps external_post_id, which would double-post to Instagram.
     disableConcurrentBuilds()
     buildDiscarder(logRotator(numToKeepStr: '100'))
-    timeout(time: 20, unit: 'MINUTES')
+    // Must exceed PUBLISH_DRAIN_ROUNDS x (route maxDuration + pause) with room
+    // to spare — 4 x 285s is ~19 minutes, so 30 leaves margin for a slow
+    // checkout. A build killed mid-publish is the worst case in this pipeline.
+    timeout(time: 30, unit: 'MINUTES')
   }
 
   triggers {
-    // Every 15 minutes. H spreads the minute across the hour so a fleet of
-    // Jenkins jobs does not all fire on :00. The route is idempotent
-    // (external_post_id gates re-publishing) and a tick with nothing due is a
-    // single cheap request, so tighten or widen freely.
-    cron('H/15 * * * *')
+    // Every 5 minutes: this now sets how late a post can be against its own
+    // scheduled_at, not when it publishes. A tick with nothing due is one cheap
+    // query, and the route is idempotent (external_post_id gates
+    // re-publishing), so frequency is close to free.
+    //
+    // Fixed */5 rather than H/5 — H would offset the minute, and there is no
+    // fleet of jobs here to spread the load of.
+    cron('*/5 * * * *')
   }
 
   parameters {

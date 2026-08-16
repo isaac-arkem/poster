@@ -3,9 +3,10 @@
 
 Triggers the ArkGPT cron route that:
   - finds ``sse_content_posts`` with status=scheduled, platform=instagram,
-    scheduled_date <= UTC today, and no external_post_id
+    scheduled_at <= now, and no external_post_id
   - publishes each via the linked ``sse_agent_accounts`` Composio credentials
-  - processes up to 5 posts per tick
+  - publishes different accounts concurrently, one at a time per account,
+    for as many as fit inside the route's time budget
 
 This script does **not** talk to Supabase or Composio directly — the app owns
 due selection + publish. Jenkins only schedules the HTTP call.

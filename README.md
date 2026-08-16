@@ -10,8 +10,9 @@ one code path:
 `GET /api/sse/cron/publish-content-posts`
 
 The app selects due rows (`status = scheduled`, `platform = instagram`,
-`scheduled_date <= UTC today`, `external_post_id is null`) and publishes up to
-5 per tick via each alias's `sse_agent_accounts` Composio credentials.
+`scheduled_at <= now`, `external_post_id is null`) and publishes them via each
+alias's `sse_agent_accounts` Composio credentials — different accounts
+concurrently, one at a time per account.
 
 ## Files
 
@@ -73,7 +74,7 @@ New Pipeline job → *Pipeline script from SCM* → Git:
 | Branch Specifier | `*/main` — Jenkins defaults to `*/master`, which fails |
 | Script Path | `Jenkinsfile` |
 
-Then **Build Now** once. The `cron('H/15 * * * *')` trigger only registers
+Then **Build Now** once. The `cron('*/5 * * * *')` trigger only registers
 after Jenkins has evaluated the Jenkinsfile, so the schedule does not start on
 its own until that first manual build.
 
@@ -108,26 +109,33 @@ defaults; you should not need to touch them.
 - **No runaway drain.** If a round publishes nothing, the loop stops instead
   of re-requesting the same failing rows for the rest of the build.
 - **No permanent red.** Per-post failures are UNSTABLE by default, so one
-  broken alias does not red every build on a 15-minute schedule.
+  broken alias does not red every build.
 - **Secret hygiene.** `set +x`; the secret is read from the environment, never
   a command line; redirects are refused so it is not replayed on another host;
   a non-https base URL is rejected (localhost excepted); and the target origin
   is not overridable at build time.
 
-## Known gap: time of day
+## What the cron expression controls
 
-`sse_content_posts.scheduled_date` is a `date`, not a timestamp. A post is due
-at 00:00 UTC on its day, so **the cron expression in the Jenkinsfile is what
-actually decides posting time** — with `H/15 * * * *` everything scheduled for
-today goes out on the first tick after midnight UTC.
+Not posting time — `sse_content_posts.scheduled_at` carries that per post. The
+cron only decides **how late a post can be**: at `*/5` a post scheduled for
+10:00 publishes by 10:05 at the worst.
 
-Options, in increasing order of work:
+Raise the frequency for tighter timing, lower it to reduce noise. A tick with
+nothing due is a single cheap query, and the route is idempotent, so frequency
+is close to free.
 
-1. Change the cron to your posting window, e.g. `H 9-21/3 * * *`.
-2. Add `scheduled_at timestamptz` to `sse_content_posts`, populate it from the
-   calendar slot's `source_meta.calendar_slot.time_label`, and switch
-   `loadDueInstagramContentPosts` to `scheduled_at <= now()`. This is the real
-   fix and the only one that gives per-post times.
+## Drain rounds and the build timeout
+
+`PUBLISH_DRAIN_ROUNDS` is bounded by the pipeline's `timeout`, not by appetite.
+A round can use the route's full 300s, so
+
+    rounds x (300 + PUBLISH_ROUND_PAUSE_SEC) < build timeout
+
+must hold. At 4 rounds and a 30-minute timeout there is comfortable margin.
+Getting this wrong is the one genuinely dangerous misconfiguration here: a
+build killed mid-round can leave a post live on Instagram with nothing recorded
+against it, and the next sweep would publish it again.
 
 ## Manual run
 
@@ -146,10 +154,14 @@ curl -sS -H "x-cron-secret: $CRON_SECRET" "$ARKGPT_BASE_URL/api/sse/cron/publish
 Response:
 
 ```json
-{ "as_of": "2026-08-14", "checked": 2, "published": 1, "failed": 1 }
+{ "as_of": "2026-08-16T07:14:02.309Z", "checked": 2, "published": 1, "failed": 1,
+  "contended": 0, "deferred": 0 }
 ```
+
+`deferred` means work was left for the next round or build; `contended` means
+another publisher held the row.
 
 The route reports counts only, so a build that goes UNSTABLE says *how many*
 posts failed but not which ones or why. The reason is persisted per row in
-`sse_content_posts.publish_error` and surfaces in the calendar UI — check
-there when a build is yellow.
+`sse_content_posts.publish_error` and surfaces in the calendar UI — check the
+failed-posts panel there when a build is yellow.
