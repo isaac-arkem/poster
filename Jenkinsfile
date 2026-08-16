@@ -30,9 +30,14 @@
 // below is therefore what actually decides the time of day posts go out.
 
 pipeline {
-  // 'any' runs on the built-in node or whatever executor is free. Swap for a
-  // label (e.g. label 'Dobby') once you want this pinned to a specific agent.
-  agent any
+  // Runs on the Jenkins controller itself — no separate agent to install or
+  // keep online. The controller needs at least one executor for this to be
+  // schedulable: Manage Jenkins -> Nodes -> Built-In Node -> Configure ->
+  // "Number of executors" >= 1. Recent Jenkins ships that at 0, and a build
+  // then sits forever on "Still waiting to schedule task".
+  //
+  // Swap for a label (e.g. label 'Dobby') to pin this to a dedicated agent.
+  agent { label 'built-in' }
 
   environment {
     // ---- EDIT THIS ----------------------------------------------------
