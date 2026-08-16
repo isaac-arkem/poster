@@ -11,9 +11,10 @@
 //
 //   1. Edit ARKGPT_BASE_URL below to point at the app you want swept.
 //   2. Create ONE Jenkins credential:
-//        Kind: "Secret text"
-//        ID:   arkgpt-cron-secret
-//        Secret: the same string as CRON_SECRET in the app's environment
+//        Kind:   "Secret text"
+//        ID:     CRON_SECRET          <- the name this file looks up
+//        Secret: the VALUE of CRON_SECRET in the app's environment
+//                (i.e. whatever follows the "=" in .env)
 //
 // That's it. Everything else has a working default.
 // ---------------------------------------------------------------------------
@@ -114,7 +115,7 @@ pipeline {
         script {
           def status = 1
           withCredentials([
-            string(credentialsId: 'arkgpt-cron-secret', variable: 'CRON_SECRET')
+            string(credentialsId: 'CRON_SECRET', variable: 'CRON_SECRET')
           ]) {
             status = sh(
               returnStatus: true,

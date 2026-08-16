@@ -29,8 +29,8 @@ The app selects due rows (`status = scheduled`, `platform = instagram`,
 | Field | Value |
 |-------|-------|
 | Kind | **Secret text** |
-| ID | `arkgpt-cron-secret` |
-| Secret | the same string as `CRON_SECRET` in the app's environment |
+| ID | `CRON_SECRET` |
+| Secret | the VALUE of `CRON_SECRET` in the app's env — what follows the `=` |
 
 That is the **only** credential this job needs. The ID is hardcoded in the
 Jenkinsfile, so it must match exactly.
