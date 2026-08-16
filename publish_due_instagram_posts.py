@@ -36,6 +36,7 @@ Example (local):
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import sys
@@ -69,6 +70,19 @@ class NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 _opener = urllib.request.build_opener(NoRedirect)
+
+
+def fingerprint(secret: str) -> str:
+    """Identify a secret without revealing it.
+
+    A 401 is ambiguous — wrong secret, or the right one truncated/prefixed on
+    the way in. Jenkins masks the secret itself in build logs (rightly), which
+    also hides any clue about WHICH value it sent. A length plus a short digest
+    is not reversible, so it is safe to print, and comparing it against the
+    same digest of the server's value settles the question in one look.
+    """
+    digest = hashlib.sha256(secret.encode("utf-8")).hexdigest()[:8]
+    return f"len={len(secret)} sha256={digest}"
 
 
 def env_str(name: str, default: str | None = None) -> str:
@@ -115,7 +129,14 @@ def trigger_publish(base_url: str, secret: str, timeout_sec: int) -> dict[str, A
         detail = e.read().decode("utf-8", errors="replace") if e.fp else ""
         hint = ""
         if e.code == 401:
-            hint = "\nhint: CRON_SECRET does not match the value set on the deployment."
+            hint = (
+                "\nhint: the secret sent does not match the one on the deployment."
+                f"\n      sent: {fingerprint(secret)}"
+                "\n      compare with the server's value:"
+                "\n        printf %s \"$CRON_SECRET\" | shasum -a 256 | cut -c1-8"
+                "\n      same digest = the secret is fine and something else is wrong;"
+                "\n      different = fix whichever side is wrong."
+            )
         elif e.code == 503:
             hint = "\nhint: COMPOSIO_API_KEY is not configured on the deployment."
         raise SystemExit(
