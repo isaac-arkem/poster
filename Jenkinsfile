@@ -79,7 +79,14 @@ pipeline {
     // Two overlapping sweeps could both select the same row before either
     // stamps external_post_id, which would double-post to Instagram.
     disableConcurrentBuilds()
-    buildDiscarder(logRotator(numToKeepStr: '100'))
+    // Set here, not in the job UI — this block rewrites the UI value on every
+    // build, so editing it there silently reverts.
+    //
+    // At */5 this keeps roughly the last 25 minutes of runs. That is fine as a
+    // record: the reason a post failed lives on the row in publish_error and
+    // in the calendar's failed-posts panel, so the build log is a convenience
+    // rather than the source of truth.
+    buildDiscarder(logRotator(numToKeepStr: '5'))
     // Must exceed PUBLISH_DRAIN_ROUNDS x (route maxDuration + pause) with room
     // to spare — 4 x 285s is ~19 minutes, so 30 leaves margin for a slow
     // checkout. A build killed mid-publish is the worst case in this pipeline.
