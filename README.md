@@ -20,6 +20,16 @@ The app selects due rows (`status = scheduled`, `platform = instagram`,
 | `Jenkinsfile` | Pipeline definition — schedule, concurrency guard, exit-code mapping |
 | `publish_due_instagram_posts.py` | Drains the route and reports. Stdlib only, no `pip install` |
 
+## Why this exists rather than a Vercel cron
+
+Vercel Cron only runs against **production** deployments. This route lives on
+`develop` for months before it reaches `main`, so a `vercel.json` entry cannot
+exercise it until long after it needs testing. This job can point at the
+develop **preview** deployment and run the sweep today.
+
+When the code eventually reaches production, either keep this job or move the
+schedule into `vercel.json` — the route is identical either way.
+
 ## Setup — the whole list
 
 ### 1. One secret on Jenkins
@@ -50,13 +60,35 @@ Jenkinsfile, so it must match exactly.
 
 Env changes are not hot-reloaded — restart `next dev` after editing.
 
+### 2b. Preview deployments only — the Vercel bypass
+
+A preview URL sits behind **Deployment Protection**, so Vercel answers with its
+own auth page before the request ever reaches the route. That looks exactly
+like a bad `CRON_SECRET` unless you read the body — the script tells the two
+apart and says which it is.
+
+To get through:
+
+1. Vercel → Project → Settings → **Deployment Protection** → enable
+   **Protection Bypass for Automation** and copy the secret.
+2. Add a Jenkins *Secret text* credential with ID `arkgpt-vercel-bypass`.
+3. Tick the **`USE_VERCEL_BYPASS`** build parameter.
+
+Leave it off for production and localhost — neither is gated.
+
 ### 3. One line in the Jenkinsfile
 
 `ARKGPT_BASE_URL` in the `environment {}` block:
 
+- develop preview — `https://arkgpt-git-develop-<team>.vercel.app`
+  (Vercel → Deployments → the develop branch → its stable branch URL)
 - local dev — `http://localhost:3000`
 - Jenkins in Docker — `http://host.docker.internal:3000`
 - production — `https://app.arkem.io`
+
+Whatever you pick, its environment needs `CRON_SECRET` and `COMPOSIO_API_KEY`
+set **for that environment** — Vercel's Preview and Production variables are
+configured separately.
 
 It is deliberately **not** a build parameter. The job sends `CRON_SECRET` to
 this origin in a header, so anyone able to override it at build time could
@@ -84,6 +116,7 @@ The agent needs `python3`. Nothing else — the script is stdlib-only.
 | Parameter | Default | Notes |
 |-----------|---------|-------|
 | `FAIL_ON_PUBLISH_ERROR` | `false` | Off → per-post failures mark the build UNSTABLE. On → they fail it |
+| `USE_VERCEL_BYPASS` | `false` | Tick for a Vercel preview deployment; needs the `arkgpt-vercel-bypass` credential |
 
 Tuning knobs (`PUBLISH_DRAIN_ROUNDS`, `PUBLISH_ROUND_PAUSE_SEC`,
 `PUBLISH_TIMEOUT_SEC`) live in the `environment {}` block with working

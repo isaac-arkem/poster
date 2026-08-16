@@ -15,6 +15,13 @@ Required env:
   CRON_SECRET       same value as the app's CRON_SECRET
 
 Optional env:
+  VERCEL_PROTECTION_BYPASS  Vercel "Protection Bypass for Automation" secret.
+                            Required when ARKGPT_BASE_URL is a PREVIEW
+                            deployment (e.g. the develop branch), because
+                            Vercel gates those behind Deployment Protection and
+                            would answer with its own auth page long before the
+                            request reaches the route. Not needed for
+                            production.
   PUBLISH_DRAIN_ROUNDS     re-call until nothing is left due (default 1)
   PUBLISH_ROUND_PAUSE_SEC  pause between rounds (default 5)
   PUBLISH_TIMEOUT_SEC      HTTP timeout per request (default 330 — must exceed
@@ -95,18 +102,26 @@ def env_bool(name: str, default: bool) -> bool:
     return raw.strip().lower() in {"1", "true", "yes", "on"}
 
 
-def trigger_publish(base_url: str, secret: str, timeout_sec: int) -> dict[str, Any]:
+def trigger_publish(
+    base_url: str,
+    secret: str,
+    timeout_sec: int,
+    bypass: str | None = None,
+) -> dict[str, Any]:
     url = f"{base_url.rstrip('/')}{ENDPOINT_PATH}"
-    req = urllib.request.Request(
-        url,
-        method="GET",
-        headers={
-            "Accept": "application/json",
-            "x-cron-secret": secret,
-            # Also accepted by the route (Vercel-style).
-            "Authorization": f"Bearer {secret}",
-        },
-    )
+    headers = {
+        "Accept": "application/json",
+        "x-cron-secret": secret,
+        # Also accepted by the route (Vercel-style).
+        "Authorization": f"Bearer {secret}",
+    }
+    if bypass:
+        # Gets us past Vercel Deployment Protection on a preview deployment.
+        # Without it Vercel answers with its own auth challenge and the route
+        # never runs — which looks like a broken cron rather than a gate.
+        headers["x-vercel-protection-bypass"] = bypass
+        headers["x-vercel-set-bypass-cookie"] = "false"
+    req = urllib.request.Request(url, method="GET", headers=headers)
     try:
         with _opener.open(req, timeout=timeout_sec) as res:
             body = res.read().decode("utf-8", errors="replace")
@@ -115,7 +130,17 @@ def trigger_publish(base_url: str, secret: str, timeout_sec: int) -> dict[str, A
         detail = e.read().decode("utf-8", errors="replace") if e.fp else ""
         hint = ""
         if e.code == 401:
-            hint = "\nhint: CRON_SECRET does not match the value set on the deployment."
+            # The route always answers JSON. An HTML 401 came from the platform
+            # in front of it — on Vercel that is Deployment Protection, which
+            # looks identical to a bad secret unless you read the body.
+            if "<html" in detail[:400].lower():
+                hint = (
+                    "\nhint: this 401 is an HTML page, so it came from the hosting "
+                    "platform rather than the route — on a Vercel preview "
+                    "deployment set VERCEL_PROTECTION_BYPASS."
+                )
+            else:
+                hint = "\nhint: CRON_SECRET does not match the value set on the deployment."
         elif e.code == 503:
             hint = "\nhint: COMPOSIO_API_KEY is not configured on the deployment."
         raise SystemExit(
@@ -139,6 +164,7 @@ def trigger_publish(base_url: str, secret: str, timeout_sec: int) -> dict[str, A
 def main() -> int:
     base_url = env_str("ARKGPT_BASE_URL")
     secret = env_str("CRON_SECRET")
+    bypass = os.environ.get("VERCEL_PROTECTION_BYPASS", "").strip() or None
     rounds = max(1, env_int("PUBLISH_DRAIN_ROUNDS", 1))
     pause_sec = max(0, env_int("PUBLISH_ROUND_PAUSE_SEC", 5))
     timeout_sec = max(30, env_int("PUBLISH_TIMEOUT_SEC", 330))
@@ -159,7 +185,7 @@ def main() -> int:
     for round_idx in range(1, rounds + 1):
         rounds_ran = round_idx
         print(f"[publish-due] round {round_idx}/{rounds} -> {base_url}{ENDPOINT_PATH}")
-        result = trigger_publish(base_url, secret, timeout_sec)
+        result = trigger_publish(base_url, secret, timeout_sec, bypass)
         as_of = str(result.get("as_of") or "")
         checked = int(result.get("checked") or 0)
         published = int(result.get("published") or 0)

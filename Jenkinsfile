@@ -36,9 +36,15 @@ pipeline {
 
   environment {
     // ---- EDIT THIS ----------------------------------------------------
+    // Develop preview:      https://arkgpt-git-develop-<team>.vercel.app
     // Local dev:            http://localhost:3000
     // Jenkins in Docker:    http://host.docker.internal:3000
     // Production:           https://app.arkem.io
+    //
+    // This job exists because Vercel Cron only runs against PRODUCTION
+    // deployments, and this route lives on develop for months before it is
+    // merged. Pointing here at the develop preview URL is what lets the sweep
+    // run — and be observed — long before main sees the code.
     //
     // Deliberately NOT a build parameter: the job sends CRON_SECRET to this
     // origin in a request header, so anyone able to override it at build time
@@ -82,6 +88,11 @@ pipeline {
       defaultValue: false,
       description: 'Off: per-post failures mark the build UNSTABLE (they are recorded on the row and retried on a later build). On: they fail the build, e.g. if you page on this job.'
     )
+    booleanParam(
+      name: 'USE_VERCEL_BYPASS',
+      defaultValue: false,
+      description: 'Tick when ARKGPT_BASE_URL is a Vercel PREVIEW deployment (e.g. develop). Vercel gates previews behind Deployment Protection and would answer with its own auth page before the route runs. Needs a Secret text credential "arkgpt-vercel-bypass" holding the Protection Bypass for Automation secret (Vercel -> Settings -> Deployment Protection). Leave off for production and localhost.'
+    )
   }
 
   stages {
@@ -106,14 +117,22 @@ pipeline {
       steps {
         script {
           def status = 1
-          withCredentials([
-            string(credentialsId: 'arkgpt-cron-secret', variable: 'CRON_SECRET')
-          ]) {
+          // Both secrets reach the script as environment variables only; it
+          // never puts either on a command line.
+          def bindings = [
+            string(credentialsId: 'arkgpt-cron-secret', variable: 'CRON_SECRET'),
+          ]
+          if (params.USE_VERCEL_BYPASS) {
+            bindings.add(string(
+              credentialsId: 'arkgpt-vercel-bypass',
+              variable: 'VERCEL_PROTECTION_BYPASS',
+            ))
+          }
+          withCredentials(bindings) {
             status = sh(
               returnStatus: true,
-              // Jenkins runs sh with -x; the cron secret would otherwise be
-              // echoed into the build log. The script reads it from the env,
-              // so it never appears on a command line either.
+              // Jenkins runs sh with -x; the secrets would otherwise be echoed
+              // into the build log.
               script: '''
                 set +x
                 python3 publish_due_instagram_posts.py
