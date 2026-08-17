@@ -51,17 +51,34 @@ Jenkinsfile, so it must match exactly.
 
 Env changes are not hot-reloaded — restart `next dev` after editing.
 
-### 3. One line in the Jenkinsfile
+### 3. Which app to sweep
 
-`ARKGPT_BASE_URL` in the `environment {}` block:
+Set a Jenkins environment variable **`ARKGPT_URL`** — the Jenkinsfile reads it
+and falls back to `http://localhost:3000`. The file is then identical in every
+copy of this repo, and each Jenkins decides its own target.
 
-- local dev — `http://localhost:3000`
-- Jenkins in Docker — `http://host.docker.internal:3000`
-- production — `https://app.arkem.io`
+Set at **Folder → Configure → Properties → Environment variables**, or
+**Manage Jenkins → System → Global properties**.
 
-It is deliberately **not** a build parameter. The job sends `CRON_SECRET` to
-this origin in a header, so anyone able to override it at build time could
-point the job at a host they control and capture the secret.
+| Target | Value |
+|--------|-------|
+| local dev | leave unset (the default) |
+| Jenkins in Docker | `http://host.docker.internal:3000` |
+| develop preview | `https://arkgpt-git-develop-arkem.vercel.app` |
+| production | `https://app.arkem.io` |
+
+Each build prints its resolved target in the Preflight stage, since the file no
+longer says which app a given job points at.
+
+It is deliberately **not** a build parameter. A parameter can be overridden at
+build time by anyone who can press Build, and this job sends `CRON_SECRET` to
+whatever origin it is handed — so a parameter would let them point it at a host
+they control and capture the secret. A Jenkins environment variable needs
+Configure permission to change, the same bar as editing the Jenkinsfile.
+
+Whatever you point at needs its own `CRON_SECRET` and `COMPOSIO_API_KEY` set on
+that deployment, and the Jenkins credential must hold that environment's
+secret.
 
 ### 4. The job
 

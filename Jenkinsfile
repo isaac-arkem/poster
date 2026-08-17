@@ -9,7 +9,9 @@
 // ---------------------------------------------------------------------------
 // TO CONFIGURE THIS JOB YOU NEED EXACTLY TWO THINGS:
 //
-//   1. Edit ARKGPT_BASE_URL below to point at the app you want swept.
+//   1. Set the Jenkins environment variable ARKGPT_URL to the app you want
+//      swept (Folder -> Configure -> Properties -> Environment variables).
+//      Leave it unset for http://localhost:3000.
 //   2. Create ONE Jenkins credential:
 //        Kind:   "Secret text"
 //        ID:     CRON_SECRET          <- the name this file looks up
@@ -44,16 +46,30 @@ pipeline {
   agent any
 
   environment {
-    // ---- EDIT THIS ----------------------------------------------------
-    // Local dev:            http://localhost:3000
-    // Jenkins in Docker:    http://host.docker.internal:3000
-    // Production:           https://app.arkem.io
+    // Which app to sweep. Taken from the Jenkins environment variable
+    // ARKGPT_URL when set, so this file is identical in every copy of the repo
+    // and each Jenkins decides its own target. Falls back to localhost, so an
+    // unconfigured job can never accidentally hit a live deployment.
     //
-    // Deliberately NOT a build parameter: the job sends CRON_SECRET to this
-    // origin in a request header, so anyone able to override it at build time
-    // could point the job at a host they control and capture the secret.
-    ARKGPT_BASE_URL = 'http://localhost:3000'
-    // -------------------------------------------------------------------
+    // Set at: Folder -> Configure -> Properties -> Environment variables
+    //         (or Manage Jenkins -> System -> Global properties)
+    //
+    //   local dev          http://localhost:3000   (the default — leave unset)
+    //   Jenkins in Docker  http://host.docker.internal:3000
+    //   develop preview    https://arkgpt-git-develop-arkem.vercel.app
+    //   production         https://app.arkem.io
+    //
+    // Read from a DIFFERENT name than it assigns — referring to
+    // env.ARKGPT_BASE_URL while defining ARKGPT_BASE_URL is self-referential
+    // inside this block.
+    //
+    // Deliberately NOT a build parameter. A parameter can be overridden at
+    // build time by anyone who can press Build, and this job sends CRON_SECRET
+    // to whatever origin it is handed — so a parameter would let them point it
+    // at a host they control and capture the secret. Changing a Jenkins
+    // environment variable needs Configure permission, the same bar as editing
+    // this file.
+    ARKGPT_BASE_URL = "${env.ARKGPT_URL ?: 'http://localhost:3000'}"
 
     // The route publishes across accounts concurrently, so a round clears
     // roughly 24 posts rather than 5. Four rounds is ~96 per build, which is
